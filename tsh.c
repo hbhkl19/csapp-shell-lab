@@ -261,8 +261,20 @@ int builtin_cmd(char **argv)
 {
     if (!strcmp(argv[0], "quit")) /* quit command */
 	exit(0);  
+    if (!strcmp(argv[0], "jobs")) { /* jobs command */
+        listjobs(jobs);
+        return 1;
+    }
+    if(!strcmp(argv[0], "bg")) { /* bg command */
+        do_bgfg(argv);
+        return 1;
+    }
+    if(!strcmp(argv[0], "fg")) { /* fg command */
+        do_bgfg(argv);
+        return 1;
+    }
     if (!strcmp(argv[0], "&"))    /* Ignore singleton & */
-	return 1;
+	    return 1;
     return 0;     /* not a builtin command */
 }
 
