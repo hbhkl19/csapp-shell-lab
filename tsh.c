@@ -175,25 +175,34 @@ void eval(char *cmdline)
     if (argv[0] == NULL)  
 	return;   /* Ignore empty lines */
 
+    sigset_t mask_one, prev_one;
+    sigemptyset(&mask_one);
+    sigaddset(&mask_one, SIGCHLD); // 只阻塞SIGCHLD
+    
+
     if (!builtin_cmd(argv)) { 
+        sigprocmask(SIG_BLOCK, &mask_one, &prev_one); // 阻塞SIGCHLD
         if ((pid = fork()) == 0) {   /* Child runs user job */
+            sigprocmask(SIG_SETMASK, &prev_one, NULL); // 子进程解除阻塞
+            setpgid(0, 0); // 设置子进程组ID为子进程PID
             if (execve(argv[0], argv, environ) < 0) {
                 printf("%s: Command not found.\n", argv[0]);
                 exit(0);
             }
         }
-
+        addjob(jobs, pid, bg ? BG : FG, cmdline); // 父进程添加作业
 	/* Parent waits for foreground job to terminate */
 	if (!bg) {
-	    int status;
-	    if (waitpid(pid, &status, 0) < 0)
-		unix_error("waitfg: waitpid error");
+	    waitfg(pid);        
+        sigprocmask(SIG_SETMASK, &prev_one, NULL); // 父进程解除阻塞
 	}
-	else
-	    printf("%d %s", pid, cmdline);
+	else{
+        sigprocmask(SIG_SETMASK, &prev_one, NULL); // 父进程解除阻塞
+        printf("[%d] (%d) %s", pid2jid(pid), pid, cmdline);
     }
 
     return;
+    }
 }
 
 /* 
@@ -283,6 +292,40 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+    struct job_t *job;
+    pid_t pid;
+    if (argv[1] == NULL) {
+        printf("%s command requires PID or JID argument\n", argv[0]);
+        return;
+    }
+    if (argv[1][0] == '%') { /* JID */
+        int jid = atoi(&argv[1][1]);
+        if ((job = getjobjid(jobs, jid)) == NULL) {
+            printf("%s: No such job\n", argv[1]);
+            return;
+        }
+        pid = job->pid;
+    } else { /* PID */
+        pid = atoi(argv[1]);
+        if ((job = getjobpid(jobs, pid)) == NULL) {
+            printf("(%d): No such process\n", pid);
+            return;
+        }
+    }
+    if (kill(-pid, SIGCONT) < 0) { /* Send signal to the process group */
+        unix_error("do_bgfg: kill error");
+    }
+    if (!strcmp(argv[0], "bg")) { /* bg command */
+        job->state = BG;
+        printf("[%d] (%d) %s", job->jid, job->pid, job->cmdline);
+    } else if (!strcmp(argv[0], "fg")) { /* fg command */
+        job->state = FG;
+        waitfg(pid); /* Wait for the foreground process to finish */
+    }
+    else {
+        printf("do_bgfg: Unknown command %s\n", argv[0]);
+    }
+
     return;
 }
 
@@ -293,7 +336,7 @@ void waitfg(pid_t pid)
 {
     sigset_t mask;
     sigemptyset(&mask);    
-    while (fg_pid == fgpid(jobs)) {
+    while (pid == fgpid(jobs)) {
         sigsuspend(&mask); // 挂起等待信号唤醒
     }
     return;
