@@ -279,6 +279,11 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+    sigset_t mask;
+    sigemptyset(&mask);    
+    while (fg_pid == fgpid(jobs)) {
+        sigsuspend(&mask); // 挂起等待信号唤醒
+    }
     return;
 }
 
@@ -295,6 +300,40 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {
+    int olderrno = errno;
+    pid_t pid;
+    int status;
+
+    while((pid=waitpid(-1,&status,WNOHANG|WUNTRACED))>0)
+    {
+        if(WIFEXITED(status))
+        {
+            deletejob(jobs,pid);
+        }
+        else if(WIFSIGNALED(status))
+        {
+            int jid=pid2jid(pid);
+            printf("Job [%d] (%d) terminated by signal %d\n",jid,pid,WTERMSIG(status));
+            deletejob(jobs,pid);
+        }
+        else if(WIFSTOPPED(status))
+        {
+            int jid=pid2jid(pid);
+            struct job_t* job=getjobpid(jobs,pid);
+            if(job!=NULL)
+            {
+                job->state=ST;
+                printf("Job [%d] (%d) stopped by signal %d\n",jid,pid,WSTOPSIG(status));
+            }
+        }
+    }
+
+
+
+
+
+
+    errno=olderrno; /* Restore errno */
     return;
 }
 
@@ -321,6 +360,14 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+    pid_t fg_pid = fgpid(jobs);
+    if(fg_pid!=0)
+    {
+        if(kill(-fg_pid,sig)<0)
+        {
+            unix_error("sigtstp_handler: kill error");
+        }
+    }
     return;
 }
 
